@@ -1,0 +1,130 @@
+---
+title: "First analysis"
+author: "Susanna Galimberti"
+output: html_document
+---
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# import libraries
+library(dplyr)
+library(ggplot2)
+
+# import our helper functions
+source('functions.R')
+
+# connect to the database
+source('.password.R')
+src = src_postgres("eo4water", "ivfl-arc.boku.ac.at", user = "weather", password = pswd)
+```
+
+Our point of interest is (16.56972 E, 48.11028 N) and we are interested in the period 2016-09-01 - 2016-10-31
+
+```{r gettingData}
+pointX = 16.56972
+pointY = 48.11028
+dateFrom = '2016-09-01'
+dateTo = '2016-10-31'
+
+dataWide = get_data_wide(src, pointX, pointY, dateFrom, dateTo)
+dataWide
+dataLong = get_data_long(src, pointX, pointY, dateFrom, dateTo)
+dataLong
+
+# and old-style
+bokuData = get_meteo_data(src, pointX, pointY, 'boku') %>%
+  filter(date >= dateFrom & date <= dateTo) %>%
+  arrange(date)
+bolamData = get_meteo_data(src, pointX, pointY, 'bolam') %>%
+  filter(date >= dateFrom & date <= dateTo) %>%
+  arrange(date)
+metgisData = get_meteo_data(src, pointX, pointY, 'metgis') %>%
+  filter(date >= dateFrom & date <= dateTo) %>%
+  arrange(date)
+openweatherData = get_meteo_data(src, pointX, pointY, 'openweather') %>%
+  filter(date >= dateFrom & date <= dateTo) %>%
+  arrange(date)
+```
+
+# TEMPERATURE PLOT
+
+Old R graphics style:
+
+```{r}
+plot(x = bokuData$date, y = bokuData$temp, type = "l", col = "green")
+lines(x = bolamData$date, y = bolamData$temp, type = "l", col = "red")
+lines(x = metgisData$date, y = metgisData$temp, type = "l", col = "blue")
+lines(x = openweatherData$date, y = openweatherData$temp, type = "l", col = "orange")
+# how to show the whole plot?
+```
+
+Using ggplot:
+
+```{r}
+dataLong %>%
+  ggplot(aes(x = date, y = temp, group = source, color = source)) +
+    geom_line()
+```
+
+# RAIN PLOT
+
+Old R graphics style:
+
+```{r}
+plot(x = bokuData$date, y = bokuData$rain, type = "p", col = "green")
+lines(x = bolamData$date, y = bolamData$rain, type = "p", col = "red")
+lines(x = metgisData$date, y = metgisData$rain, type = "p", col = "blue")
+lines(x = openweatherData$date, y = openweatherData$rain, type = "p", col = "orange")
+# how to plot just rain value > 0 ?
+```
+
+Using ggplot:
+
+```{r}
+dataLong %>%
+  filter(rain > 0) %>%
+  ggplot(aes(x = date, y = rain, group = source, color = source)) +
+    geom_point()
+```
+
+# TEMPERATURE DESCRIPTIVE STATISTICS
+
+```{r, echo = TRUE}
+summary(dataWide$bk_temp)
+summary(dataWide$bl_temp)
+summary(dataWide$ow_temp)
+summary(dataWide$mg_temp)
+```
+
+## testing normal distribution
+
+```{r, echo=TRUE}
+shapiro.test(dataWide$bk_temp)
+```
+
+Data not normally distributed (we reject NULL HYP.) -> non-parametric test
+
+```{r, echo=TRUE}
+wilcox.test(dataWide$bk_temp, dataWide$bl_temp, paired=T)
+wilcox.test(dataWide$bk_temp, dataWide$mg_temp, paired=T)
+wilcox.test(dataWide$bk_temp, dataWide$ow_temp, paired=T)
+```
+
+IF (!!) this is correct, then it tells that only bl_temp made good prognoses
+
+```{r, echo=TRUE}
+tempByCol$diff_bktemp <- c(tempByCol$bk_temp - tempByCol$bl_temp)
+```
+
+difference Tboku e T bolam
+
+```{r, echo=TRUE}
+shapiro.test(tempByCol$diff_bktemp)
+```
+
+normally distributed -> t-test
+
+```{r, echo=TRUE}
+t.test(tempByCol$diff_bktemp, mu=0)
+```
+
+null hyp. = the mean is equal to 0 and we cannot reject it --> random

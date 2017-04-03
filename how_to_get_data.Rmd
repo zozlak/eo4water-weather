@@ -1,0 +1,300 @@
+---
+title: "eo4water weather data"
+author: "Mateusz Żółtak zozlak@zozlak.org"
+output: html_document
+---
+
+eo4water database gathers weather data from 4 different sources:
+
+|      source      |        grid        |    period    |
+|:----------------:|:------------------:|:------------:|
+| BOKU weather station | single point: 48.1103N 16.5697E | 2014-03-02 - 2016-10-14 |
+| Bolam numeric forecast (http://www.isac.cnr.it/en/content/weather-forecasts) | 241604 on a 8.3 km grid covering whole Europe (excluding Scandinavia) | 2016-01-01 - 2016-10-31 |
+| metgis numeric forecast | 31 arbitrary locations in Austria (main Marchfeld) and Romania | 2016-08-22 - 2017-01-05 |
+| openweather numeric forecast | 3425 points spread evenly across Europe | 2016-09-01 - now |
+
+# Database connection
+
+To fetch data, a database connection is required. You can obtain in in R using:
+
+```{r, warning=FALSE, message=FALSE}
+source('.password.R')
+library(dplyr)
+src = src_postgres('eo4water', 'ivfl-arc.boku.ac.at', user = 'weather', password = pswd)
+```
+
+In all examples below it is assumed you already established a connection and stored it in the `src` variable.
+
+# Datasets
+
+## Standardized
+
+Depending on the source data are gathered in a slightly diffent way.
+
+To address this issue database contains standardized datasets: `swb.boku_data_daily`, `swb.bolam_data_daily`, `swb.metgis_data_daily` and `swb.openweather_data_daily` each of them containing the same set of data on the same agregation level (point of a given dataset grid for a given date). The data include:
+
+* `point_id` identifier of a grid point
+* `date` date
+* `tmax`, `tmin`, `temp` maximal, minimal and average daily temprature in Celsius degrees
+* `rhmax`, `rhmin`, `rh` maximal, minimal and average daily humidity in percents
+* `rain` total daily precipitation in mm
+* `count` number of measures taken during given day
+* `et0` estimated evapotransipration
+
+The most convenient way of accessing these data from R is to use the `dplyr` package.
+
+```{r, warning=FALSE, message=FALSE}
+bokuData = tbl(src, sql("SELECT * FROM swb.boku_data_daily"))
+head(bokuData)
+bolamData = tbl(src, sql("SELECT * FROM swb.bolam_data_daily"))
+head(bolamData)
+# etc.
+```
+
+The problem is that compa
+
+## Not aggregated data
+
+Data from metgis and openweather are also available for 3-hour intervals. They are stored in datasets `swb.methis_data_cur` and `swb.openweather_data_cur`.
+
+Unfortunetely unfortunately these datasets are not standardized and contain all information obtained from a given data source.
+
+They can be accessed in a similar way then other datasets:
+
+```{r, warning=FALSE, message=FALSE}
+metgisData3h = tbl(src, sql("SELECT * FROM swb.metgis_data_cur"))
+head(metgisData3h)
+openweatherData3h = tbl(src, sql("SELECT * FROM swb.openweather_data_cur"))
+head(openweatherData3h)
+```
+
+## Raw data
+
+The last set of datasets (`swb.boku_data`, `swb.bolam_data`, `swb.metgis_data`, `swb.openweather_data`) are the ones storing raw data as gathered from a given data source. 
+
+* Columns available for each dataset differ. It is sad but all we can do about is to agree that life is hard.
+* Raw data from methis and openweather contain many records for the same 3h intervals.  
+  This is because metgis and openweather provide also forecasts for the next few days and the data are gathered daily (lets assume a 3-days forecast is provided, data are gathered every day at 3am and we are interested in data for *2017-01-14 06:00* - they were gathered 3 times on *2017-01-12* as a forecast for the third day, on *2017-01-13* as a forecast for the next day and on *2017-01-14* as a forecast for today).  
+  The *not aggregated data* described in the previous chapter have only single values for a given 3h period which is always the last gathered forecast for this period (in the example above the one gathered on *2017-01-14*)
+  
+These datasets can be accessed in exactly the same way as others:
+
+```{r, warning=FALSE, message=FALSE}
+bokuRaw = tbl(src, sql("SELECT * FROM swb.boku_data"))
+head(bokuRaw)
+bolamRaw = tbl(src, sql("SELECT * FROM swb.bolam_data"))
+head(bolamRaw)
+# etc.
+```
+
+# Grids
+
+One of the biggest problems are different grids used by different data sources.
+
+It makes sense to compare values between data sources only if they describe points being close to each other. Thus when you want to compare data from different sources you should start with a data source with a sparse grid (*boku* - only one or *metgis* - 31 points) and then try to find closest points on other data sources' grids (*openweather* and *bolam*).
+
+Grid points are stored in datasets `swb.points_boku`, `swb.points_bolam`, `swb.points_metgis`, `swb.points_openweather`.
+
+Getting points and their coordinates requires a little more typing:
+
+```{r, warning=FALSE, message=FALSE}
+bokuPoints = tbl(src, sql("SELECT point_id, st_x(point) AS x, st_y(point) AS y FROM swb.boku_points")) %>% 
+  collect(n = Inf)
+head(bokuPoints)
+bolamPoints = tbl(src, sql("SELECT point_id, st_x(point) AS x, st_y(point) AS y FROM swb.bolam_points")) %>% 
+  collect(n = Inf)
+head(bolamPoints)
+# etc.
+```
+
+Point coordinates are given in WGS-84 projection.
+
+## Browsing trough points
+
+You can browse points using filters and ordering, e.g.
+
+```{r, warning=FALSE, message=FALSE}
+bolamPoints = tbl(src, sql("SELECT point_id, st_x(point) AS x, st_y(point) AS y FROM swb.bolam_points")) %>% 
+  collect(n = Inf)
+# select all points from the bolam grid in the rectangle with {(16E, 48N), (17E, 49N)} and order them by their x coordinate value
+myPoints = bolamPoints %>%
+  filter(x > 16 & x < 17 & y > 48 & y < 49) %>%
+  arrange(x)
+myPoints
+```
+
+## Finding closest points
+
+There are many ways you can select adjacent points from different grids.
+
+### Simple solution
+
+Use Pitagoras theorem to compute distance between the point you selected and the others, order points but that distance and pick up the first one:
+
+```{r, warning=FALSE, message=FALSE}
+myPoint = c(x = 16.48, y = 48.16) # our point of interest
+bolamPoints = tbl(src, sql("SELECT point_id, st_x(point) AS x, st_y(point) AS y FROM swb.bolam_points")) %>% 
+  collect(n = Inf)
+closestBolamPoint = bolamPoints %>%
+  mutate(dist = sqrt((x - myPoint['x'])^2 + (y - myPoint['y'])^2)) %>%
+  arrange(dist) %>%
+  head(n = 1)
+closestBolamPoint
+```
+
+### Compute the real distance in meters
+
+To compute real distance on the Earth surface measured in meters is slightly more complicated:
+
+```{r, warning=FALSE, message=FALSE}
+myPoint = c(x = 16.48, y = 48.16) # our point of interest
+grid = 'bolam'
+query = "
+  SELECT 
+    point_id, 
+    st_x(point) AS x, 
+    st_y(point) AS y,
+    st_distance(ST_GeographyFromText('SRID=4326;POINT(%f %f)'), point::geography) AS dist
+  FROM swb.%s_points
+  ORDER BY 4
+  LIMIT 1"
+closestBolamPoint = tbl(src, sql(sprintf(query, myPoint['x'], myPoint['y'], grid))) 
+closestBolamPoint
+```
+# Putting it all together
+
+## Getting meteo data for a given point
+
+If you are interested in a given point it makes sense to fetch only meteo data describing this point.
+
+Lets assume you want to get openweather data for the period 2016-09-01 - 2016-10-31 for the grid point being closest to `(16.48E, 48.16N)`.
+We are interested in the standardized dataset and we want data to be ordered by date.
+
+We will combine previous examples and the `semi_join` function allowing us to filter one dataset by using the other.
+
+```{r, warning=FALSE, message=FALSE}
+myPoint = c(x = 16.48, y = 48.16) # our point of interest
+grid = 'openweather'
+query = "
+  SELECT 
+    point_id, 
+    st_x(point) AS x, 
+    st_y(point) AS y,
+    st_distance(ST_GeographyFromText('SRID=4326;POINT(%f %f)'), point::geography) AS dist
+  FROM swb.%s_points
+  ORDER BY 4
+  LIMIT 1"
+closestOpenweatherPoint = tbl(src, sql(sprintf(query, myPoint['x'], myPoint['y'], grid)))
+closestOpenweatherPoint
+
+openweatherData = tbl(src, sql("SELECT * FROM swb.bolam_data_daily"))
+
+myData = openweatherData %>%
+  filter(date >= '2016-09-01' & date <= '2016-10-31') %>%
+  semi_join(closestOpenweatherPoint) %>%
+  collect(n = Inf) %>%
+  arrange(date)
+myData
+```
+
+### Automating it
+
+It will be easier (especially in the next example) if we create a function fetching the data for a given dataset and coordinates:
+
+```{r, warning=FALSE, message=FALSE}
+get_meteo_data = function(src, x, y, source) {
+  query = "
+    SELECT 
+      point_id, 
+      st_x(point) AS x, 
+      st_y(point) AS y,
+      st_distance(ST_GeographyFromText('SRID=4326;POINT(%f %f)'), point::geography) AS dist
+    FROM swb.%s_points
+    ORDER BY 4
+    LIMIT 1"
+  closestPoint = tbl(src, sql(sprintf(query, x, y, source)))
+
+  meteoData = tbl(src, sql(sprintf("SELECT * FROM swb.%s_data_daily", source))) %>%
+    semi_join(closestPoint) %>%
+    collect(n = Inf)
+  
+  return(meteoData)
+}
+```
+
+Now we can rewrite the last example as follows:
+
+```{r, warning=FALSE, message=FALSE}
+myData = get_meteo_data(src, 16.48, 48.16, 'openweather') %>%
+  filter(date >= '2016-09-01' & date <= '2016-10-31') %>%
+  arrange(date)
+myData
+```
+
+## Merging data from different sources
+
+In the previous example we fetched data from a single source. Now lets assume we want to get data from all sources and then merge them, so we can compare them.
+
+To make the example more clear we will use the function we created in the last chapter.
+
+We will start with getting all the data separately:
+
+```{r, warning=FALSE, message=FALSE}
+bokuData = get_meteo_data(src, 16.48, 48.16, 'boku') %>%
+  filter(date >= '2016-09-01' & date <= '2016-10-31') %>%
+  arrange(date)
+bolamData = get_meteo_data(src, 16.48, 48.16, 'bolam') %>%
+  filter(date >= '2016-09-01' & date <= '2016-10-31') %>%
+  arrange(date)
+metgisData = get_meteo_data(src, 16.48, 48.16, 'metgis') %>%
+  filter(date >= '2016-09-01' & date <= '2016-10-31') %>%
+  arrange(date)
+openweatherData = get_meteo_data(src, 16.48, 48.16, 'openweather') %>%
+  filter(date >= '2016-09-01' & date <= '2016-10-31') %>%
+  arrange(date)
+```
+
+Now we can combine them in two ways.
+
+### Combining by rows
+
+Combining by rows is easy - we should only add to each dataset a column identyfying source and then combine them using `bind_rows`:
+
+```{r, warning=FALSE, message=FALSE}
+bokuData = bokuData %>%
+  mutate(source = 'boku')
+bolamData = bolamData %>%
+  mutate(source = 'bolam')
+metgisData = metgisData %>%
+  mutate(source = 'metgis')
+openweatherData = openweatherData %>%
+  mutate(source = 'openweather')
+
+dataByRow = bokuData %>%
+  full_join(bolamData) %>%
+  full_join(metgisData) %>%
+  full_join(openweatherData)
+dataByRow
+```
+
+### Combining by columns
+
+If we prefer a row to represent a single date and data coming from different sources to go into adjacent columns, we must:
+
+* rename all columns but the one we will use for merging (`date`) by adding a prefix (or a suffix) 
+* merge them using `full_join()` function
+
+```{r, warning=FALSE, message=FALSE}
+names(bokuData) = sub('^.*date$', 'date', paste0('bk_', names(bokuData)))
+names(bolamData) = sub('^.*date$', 'date', paste0('bl_', names(bolamData)))
+names(metgisData) = sub('^.*date$', 'date', paste0('mg_', names(metgisData)))
+names(openweatherData) = sub('^.*date$', 'date', paste0('ow_', names(openweatherData)))
+
+dataByCol = bokuData %>%
+  full_join(bolamData) %>%
+  full_join(metgisData) %>%
+  full_join(openweatherData)
+# because we now have o lot of columns, lets display only average temprature
+dataByCol %>% 
+  select(date, ends_with('temp'))
+```
