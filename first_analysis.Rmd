@@ -17,18 +17,18 @@ source('.password.R')
 src = src_postgres("eo4water", "ivfl-arc.boku.ac.at", user = "weather", password = pswd)
 ```
 
-Our point of interest is (16.56972 E, 48.11028 N) and we are interested in the period 2016-09-01 - 2016-10-31
+Our point of interest is (16.56972 E, 48.11028 N) and we are interested in the period 2016-09-01 - 2016-10-14
 
 ```{r gettingData}
 pointX = 16.56972
 pointY = 48.11028
 dateFrom = '2016-09-01'
-dateTo = '2016-10-31'
+dateTo = '2016-10-14'
 
 dataWide = get_data_wide(src, pointX, pointY, dateFrom, dateTo)
-dataWide
+dataWide # organize data in colomns (bk_temp, bl_temp,...)
 dataLong = get_data_long(src, pointX, pointY, dateFrom, dateTo)
-dataLong
+dataLong # organize data in rows (source)
 
 # and old-style
 bokuData = get_meteo_data(src, pointX, pointY, 'boku') %>%
@@ -63,8 +63,68 @@ Using ggplot:
 dataLong %>%
   ggplot(aes(x = date, y = temp, group = source, color = source)) +
   geom_line() +
-  scale_x_date(date_breaks = "7 days") 
+  scale_x_date(date_breaks = "10 days") 
 ```
+# PAIRWISE DIFFERENCES OF AVERAGE DAILY TEMPERATURE
+dif: We create the new coloumn "dbkbl_temp"" to get the pairwise differences and we plot them.
+  "geom_line" connect data in order of the x axsis.
+dif2: We create new coloumns  
+  "lead" or "lag" compare value offset by previous or next value.
+  "group"or "ungroup" only difference is that appear the number of groups: date [44], we group at the beggining to compare and after   we retidy up the rows per      source.
+```{r}
+dif = dataWide %>%
+  mutate(dbkbl_temp = bk_temp - bl_temp) 
+
+dif %>%
+  ggplot(aes(x = date, y = dbkbl_temp)) +
+  geom_line() 
+
+dif2 = dataLong %>%
+  group_by(date) %>%
+  arrange(source) %>%
+  mutate(
+    diff_temp = temp - lead(temp),
+    diff_label = paste(source, lead(source))
+  ) %>%
+  ungroup() 
+
+dif2 %>%
+  filter(!is.na(diff_temp)) %>%
+  ggplot(aes(x = date, y = diff_temp, group = diff_label, color = diff_label)) +
+  geom_line()
+
+dif2 %>%
+  filter(!is.na(diff_temp)) %>%
+  ggplot(aes(x = diff_temp, group = diff_label, color = diff_label)) +
+  geom_density()
+
+```
+
+# DESCRIPTIVE STATISTICS
+```{r}
+dif2 %>%
+  filter(diff_label == 'bk bl') %>%
+  select(diff_temp) %>%
+  summary()
+dif2 %>%
+  filter(diff_label == 'bl mg') %>%
+  select(diff_temp) %>%
+  summary()
+dif2 %>%
+  filter(diff_label == 'mg ow') %>%
+  select(diff_temp) %>%
+  summary()
+
+
+dif2 %>%
+  filter(!is.na(diff_temp)) %>%
+  group_by(diff_label) %>%
+  ggplot(aes(x = diff_label, y = diff_temp)) + 
+  geom_boxplot()+
+  scale_y_continuous(breaks = c(-4, -3.5, -3, -2.5, -2, -1.5, -1, -0.5, -0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4))
+
+```
+
 
 # RAIN PLOT
 
@@ -75,7 +135,6 @@ plot(x = bokuData$date, y = bokuData$rain, type = "p", col = "green")
 lines(x = bolamData$date, y = bolamData$rain, type = "p", col = "red")
 lines(x = metgisData$date, y = metgisData$rain, type = "p", col = "blue")
 lines(x = openweatherData$date, y = openweatherData$rain, type = "p", col = "orange")
-# how to plot just rain value > 0 ?
 ```
 
 Using ggplot:
@@ -84,78 +143,108 @@ Using ggplot:
 dataLong %>%
   filter(rain > 0) %>%
   ggplot(aes(x = date, y = rain, group = source, color = source)) +
-    geom_point()
+    geom_point() +
+  scale_x_date(date_breaks = "10 days")
 ```
 
-# TEMPERATURE DESCRIPTIVE STATISTICS
-
-```{r, echo = TRUE}
-summary(dataWide$bk_temp)
-summary(dataWide$bl_temp)
-summary(dataWide$ow_temp)
-summary(dataWide$mg_temp)
-```
-
-## testing normal distribution
-
-```{r, echo=TRUE}
-shapiro.test(dataWide$bk_temp)
-```
-
-Data not normally distributed (we reject NULL HYP.) -> non-parametric test
-
-```{r, echo=TRUE}
-wilcox.test(dataWide$bk_temp, dataWide$bl_temp, paired=T)
-wilcox.test(dataWide$bk_temp, dataWide$mg_temp, paired=T)
-wilcox.test(dataWide$bk_temp, dataWide$ow_temp, paired=T)
-```
-
-IF (!!) this is correct, then it tells that only bl_temp made good prognoses
-
-```{r, echo=TRUE}
-tempByCol$diff_bktemp <- c(tempByCol$bk_temp - tempByCol$bl_temp)
-```
-
-difference Tboku e T bolam
-
-```{r, echo=TRUE}
-shapiro.test(tempByCol$diff_bktemp)
-```
-
-normally distributed -> t-test
-
-```{r, echo=TRUE}
-t.test(tempByCol$diff_bktemp, mu=0)
-```
-
-null hyp. = the mean is equal to 0 and we cannot reject it --> random
-
+# PAIRWISE DIFFERENCES OF SUM DAILY PRECIPITATION
 ```{r}
-dif = dataWide %>%
-  mutate(dbkbl_temp = bk_temp - bl_temp)
-dif %>%
-  ggplot(aes(x = date, y = dbkbl_temp)) +
-  geom_line()
-
-dif2 = dataLong %>%
+difRAIN = dataLong %>%
   group_by(date) %>%
   arrange(source) %>%
   mutate(
-    diff_temp = temp - lead(temp),
-    diff_label = paste(source, lead(source))
+    diff_rain = rain - lead(rain),
+    diff_rain_label = paste(source, lead(source))
   ) %>%
-  ungroup()
-dif2 %>%
-  filter(!is.na(diff_temp)) %>%
-  ggplot(aes(x = date, y = diff_temp, group = diff_label, color = diff_label)) +
+  ungroup() 
+
+difRAIN %>%
+  group_by(diff_rain_label) %>%
+  count(
+    diff_rain > 0,
+    diff_rain < 0,
+    diff_rain = 0
+    ) # attempt 1
+
+```
+
+
+# SAME ANALYSIS FOR NEUSIEDLER SEE POINT
+The poin of interest now is (16.745 E, 47.929 N) and we are interested in the period 2016-09-01 - 2016-10-14.
+This point is settled on the shore of a big lake.
+
+```{r gettingData}
+pointX = 16.745
+pointY = 47.929
+dateFrom = '2016-09-01'
+dateTo = '2016-10-14'
+
+dataWideNS = get_data_wide(src, pointX, pointY, dateFrom, dateTo)
+dataWideNS # organize data in colomns (bk_temp, bl_temp,...)
+dataLongNS = get_data_long(src, pointX, pointY, dateFrom, dateTo)
+dataLongNS # organize data in rows (source)
+```
+
+# TEMPERATURE NS
+```{r}
+dataLongNS %>%
+  ggplot(aes(x = date, y = temp, group = source, color = source)) +
+  geom_line() +
+  scale_x_date(date_breaks = "10 days") 
+```
+
+# PAIRWISE DIFFERENCES NS
+```{r}
+difNS = dataWideNS %>%
+  mutate(dbkbl_tempNS = bk_temp - bl_temp) 
+
+difNS %>%
+  ggplot(aes(x = date, y = dbkbl_tempNS)) +
+  geom_line() 
+
+dif2NS = dataLongNS %>%
+  group_by(date) %>%
+  arrange(source) %>%
+  mutate(
+    diff_tempNS = temp - lead(temp),
+    diff_labelNS = paste(source, lead(source))
+  ) %>%
+  ungroup() 
+
+dif2NS %>%
+  filter(!is.na(diff_tempNS)) %>%
+  ggplot(aes(x = date, y = diff_tempNS, group = diff_labelNS, color = diff_labelNS)) +
   geom_line()
-dif2 %>%
-  filter(!is.na(diff_temp)) %>%
-  ggplot(aes(x = diff_temp, group = diff_label, color = diff_label)) +
+
+dif2NS %>%
+  filter(!is.na(diff_tempNS)) %>%
+  ggplot(aes(x = diff_tempNS, group = diff_labelNS, color = diff_labelNS)) +
   geom_density()
 
-dif2 %>%
-  filter(diff_label == 'bk bl') %>%
-  select(diff_temp) %>%
-  summary()
 ```
+ 
+# DESCRIPTIVE STATISTICS NS
+```{r}
+dif2NS %>%
+  filter(diff_labelNS == 'bk bl') %>%
+  select(diff_tempNS) %>%
+  summary()
+dif2NS %>%
+  filter(diff_labelNS == 'bl mg') %>%
+  select(diff_tempNS) %>%
+  summary()
+dif2NS %>%
+  filter(diff_labelNS == 'mg ow') %>%
+  select(diff_tempNS) %>%
+  summary()
+
+
+dif2NS %>%
+  filter(!is.na(diff_tempNS)) %>%
+  group_by(diff_labelNS) %>%
+  ggplot(aes(x = diff_labelNS, y = diff_tempNS)) + 
+  geom_boxplot()+
+  scale_y_continuous(breaks = c(-4, -3.5, -3, -2.5, -2, -1.5, -1, -0.5, -0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4))
+
+```
+
