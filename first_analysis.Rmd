@@ -8,6 +8,7 @@ output: html_document
 # import libraries
 library(dplyr)
 library(ggplot2)
+library(tidyr)
 
 # import our helper functions
 source('functions.R')
@@ -192,6 +193,19 @@ difRAIN %>%
 
 
 ```
+WEEKLY SUMS OF PRECIPITATION
+
+```{r}
+dataLong %>% 
+  mutate(week = round(as.numeric(date) / 7) ) %>% 
+  group_by(source, week) %>% 
+  summarize(
+    rain = sum(rain) 
+  ) %>%
+  arrange(week) %>%
+  spread(source, rain)
+```
+
 # SAME ANALYSIS FOR NEUSIEDLER SEE POINT
 The poin of interest now is (16.745 E, 47.929 N) and we are interested in the period 2016-09-01 - 2016-10-14.
 This point is settled on the shore of a big lake.
