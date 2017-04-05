@@ -164,11 +164,34 @@ difRAIN %>%
     diff_rain > 0,
     diff_rain < 0,
     diff_rain = 0
-    ) # attempt 1
+    ) # attempt 1 = useless!
 
+difRAIN %>%
+  filter(!is.na(diff_rain)) %>%
+  ggplot(aes(x = date, y = diff_rain, group = diff_rain_label, color = diff_rain_label, fill = diff_rain_label)) + 
+  geom_col(position = "dodge")
 ```
 
+bl compared to bk overestimates the amount of daily precipitation.
+mg compared to bl underestimates the amount of daily rain --> compare mg-b!
+ow compared to mg overestimates --> trend similar to bl?
 
+
+```{r}
+difRAIN %>%
+  filter(!is.na(diff_rain)) %>%
+  group_by(diff_rain_label)%>%
+  ggplot(aes(x = diff_rain, group = diff_rain_label, color = diff_rain_label)) +
+  geom_density() # not good
+
+difRAIN %>%
+  filter(!is.na(diff_rain)) %>%
+  group_by(diff_rain_label) %>%
+  ggplot(aes(x = diff_rain_label, y = diff_rain)) + 
+  geom_boxplot() # how to show it better?
+
+
+```
 # SAME ANALYSIS FOR NEUSIEDLER SEE POINT
 The poin of interest now is (16.745 E, 47.929 N) and we are interested in the period 2016-09-01 - 2016-10-14.
 This point is settled on the shore of a big lake.
