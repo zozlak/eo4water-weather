@@ -1,0 +1,65 @@
+---
+title: "Analysing predictions"
+author: "Mateusz Żółtak"
+date: "4 maja 2017"
+output: html_document
+---
+
+Raw data:
+```{r}
+metgisRaw = tbl(src, sql("SELECT * FROM swb.metgis_data"))
+head(metgisRaw)
+```
+
+Forecasts are provided for 3h periods.
+
+Take data for point_id 1, limit to predictions yunger then 3 days before the actual 3h period, then for each 3h period compute maximum difference between the actual measure and predictions.
+Finally plot histogram of this differences.
+
+```{r}
+tmp = metgisRaw %>%
+  filter(point_id == 1) %>%
+  collect() %>%
+  group_by(point_id, date) %>%
+  arrange(desc(download_date)) %>%
+  filter(download_date - first(download_date) >= -60*60*24*4) %>%
+  summarize(n = n(), diffMax = max(abs(first(tmp2m) - tmp2m))) %>%
+  arrange(date)
+tmp %>%
+  ggplot(aes(x = diffMax)) +
+  geom_density()
+```
+
+Take data for point_id 1, limit to predictions yunger then 3 days before the actual 3h period, then for each prediction for each 3h period compute its difference with the actual measure.
+
+```{r}
+tmp2 = metgisRaw %>%
+  filter(point_id == 1) %>%
+  collect() %>%
+  group_by(point_id, date) %>%
+  arrange(desc(download_date)) %>%
+  filter(download_date - first(download_date) >= -60*60*24*3) %>%
+  mutate(order = -(1:n()) + 1, diff = first(tmp2m) - tmp2m) %>%
+  filter(download_date != first(download_date), as.character(date) < '2017-05-04')
+tmp2 %>%
+  arrange(desc(date), desc(download_date))
+```
+
+Take data for point_id 1, aggregate 3h periods to full days by taking average, limit to predictions yunger then 3 days before the actual date, then for each prediction for each date compute its difference with the actual measure.
+
+```{r}
+tmp3 = metgisRaw %>%
+  filter(point_id == 1) %>%
+  collect() %>%
+  mutate(date = substr(date, 1, 10)) %>%
+  group_by(point_id, download_date, date) %>%
+  summarize(tmp2m = mean(tmp2m))
+tmp3 = tmp3 %>%
+  group_by(point_id, date) %>%
+  arrange(desc(download_date)) %>%
+  filter(download_date - first(download_date) >= -60*60*24*3) %>%
+  mutate(diff = round(first(tmp2m) - tmp2m, 3)) %>%
+  filter(download_date != first(download_date), as.character(date) < '2017-05-04')
+tmp3 %>%
+  arrange(desc(date), desc(download_date))
+```
